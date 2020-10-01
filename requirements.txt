@@ -5,3 +5,5 @@ numpy
 pandas
 # tensorflow==1.15
 tqdm
+torch
+torchvision

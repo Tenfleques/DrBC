@@ -1,8 +1,6 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 """
-
-@author: fanchangjun
 """
 from __future__ import print_function, division
 import tensorflow as tf
@@ -18,6 +16,8 @@ import metrics
 import pickle as cp
 import os
 import time
+from torch.utils.tensorboard import SummaryWriter
+
 
 EMBEDDING_SIZE = 128 # embedding dimension
 LEARNING_RATE = 0.0001
@@ -57,6 +57,7 @@ class BetLearn:
         NUM_MAX = kwargs.get('NUM_MAX', NUM_MAX)
         MAX_ITERATION = kwargs.get('MAX_ITERATION', MAX_ITERATION)
 
+        self.weighted = kwargs.get("weighted", False)
         self.embedding_size = EMBEDDING_SIZE
         self.learning_rate = LEARNING_RATE
         self.reg_hidden = REG_HIDDEN
@@ -272,6 +273,7 @@ class BetLearn:
 
     def gen_graph(self, num_min=NUM_MIN, num_max=NUM_MAX):
         cur_n = np.random.randint(num_max - num_min + 1) + num_min
+        g = None
         if self.g_type == 'erdos_renyi':
             g = nx.erdos_renyi_graph(n=cur_n, p=0.15)
         elif self.g_type == 'small-world':
@@ -280,37 +282,40 @@ class BetLearn:
             g = nx.barabasi_albert_graph(n=cur_n, m=4)
         elif self.g_type == 'powerlaw':
             g = nx.powerlaw_cluster_graph(n=cur_n, m=4, p=0.05)
-        
-        
+    
         return g
 
     def gen_new_graphs(self, num_min, num_max, save_dir, dataset_order):
         print('\ngenerating new training graphs...')
         self.ClearTrainGraphs()
         out_dir = os.path.join(save_dir, "ds-{}".format(dataset_order))
+        os.makedirs(out_dir, exist_ok=True)
 
         for i in tqdm(range(1000)):
             g = self.gen_graph(num_min, num_max)
             self.InsertGraph(g, is_test=False)
             
             out_file_name = os.path.join(out_dir, "graph-{}-.txt".format(i))
-            nx.write_edgelist(g, out_file_name)
+            
+            nx.write_edgelist(g, out_file_name, data=self.weighted)
 
             bc = self.utils.Betweenness(self.GenNetwork(g))
             bc_log = self.utils.bc_log
 
-            out_file_name = os.path.join(out_dir, "graph-bc-{}-.txt".format(i))
-            with open(out_file_name, "w") as fp:
-                bc_str = "\n".join(bc)
-                fp.write(bc_str)
-                fp.close()
+            if isinstance(bc, list):
+                out_file_name = os.path.join(out_dir, "graph-bc-{}-.txt".format(i))
+                with open(out_file_name, "w") as fp:
+                    bc_str = "\n".join(map(str, bc))
+                    fp.write(bc_str)
+                    fp.close()
             
-            out_file_name = os.path.join(out_dir, "graph-bc-log-{}-.txt".format(i))
-            with open(out_file_name, "w") as fp:
-                bc_log_str = "\n".join(bc_log)
-                fp.write(bc_log_str)
-                fp.close()
-            
+            if isinstance(bc_log, list):
+                out_file_name = os.path.join(out_dir, "graph-bc-log-{}-.txt".format(i))
+                with open(out_file_name, "w") as fpc:
+                    bc_log_str = "\n".join(map(str, bc_log))
+                    fpc.write(bc_log_str)
+                    fpc.close()
+                
             self.TrainBetwList.append(bc_log)
 
 
@@ -410,14 +415,18 @@ class BetLearn:
     def Train(self, save_dir = './models', logs_dir='./logs'):
         self.PrepareValidData()
 
-        dataset_dir = os.path.join(save_dir, "datasets")
+        dataset_dir = os.path.join(save_dir, "dataset")
+        checkpoint_dir = os.path.join(save_dir, "checkpoints")
+        os.makedirs(dataset_dir, exist_ok=True)
+        os.makedirs(logs_dir, exist_ok=True)
+        os.makedirs(checkpoint_dir, exist_ok=True)
         
         dataset_order = 0
         self.gen_new_graphs(NUM_MIN, NUM_MAX, dataset_dir, dataset_order)
         dataset_order += 1
 
         VCFile = '%s/ValidValue.csv' % (save_dir)
-        logs_file = os.path.join(logs_dir, "stdout", "log")
+        logs_file = os.path.join(logs_dir, "train.log")
         
         f_out = open(VCFile, 'w')
         f_out.write('top-k, frac_kendal\n')  # write vc into the file
@@ -425,11 +434,11 @@ class BetLearn:
 
         train_log_dir = os.path.join(logs_dir,'train')
         test_log_dir = os.path.join(logs_dir,'test')
+        train_writer = SummaryWriter(train_log_dir)
+        test_writer = SummaryWriter(test_log_dir)
 
-        train_summary_writer = tf.summary.create_file_writer(train_log_dir)
-        test_summary_writer = tf.summary.create_file_writer(test_log_dir)
-
-        logs_out = open(logs_file)
+        logs_out = open(logs_file, "w")
+        
         for iter in range(MAX_ITERATION):
             TrainLoss = self.Fit()
             start = time.clock()
@@ -437,8 +446,7 @@ class BetLearn:
                 self.gen_new_graphs(NUM_MIN, NUM_MAX, dataset_dir, dataset_order)
                 dataset_order += 1
             
-            with train_summary_writer.as_default():
-                tf.summary.scalar('loss', TrainLoss, step=iter)
+            train_writer.add_scalar('loss', TrainLoss, iter)
 
             if iter % 500 == 0:
                if (iter == 0):
@@ -454,16 +462,15 @@ class BetLearn:
                    frac_kendal += temp_kendal / n_valid
 
                test_end = time.time()
-               with test_summary_writer.as_default():
-                    tf.summary.scalar('top-k', frac_topk, step=iter)
-                    tf.summary.scalar('frac_kendal', frac_kendal, step=iter)
+               test_writer.add_scalar('accuracy/top-k', frac_topk, iter)
+               test_writer.add_scalar('accuracy/frac_kendal', frac_kendal, iter)
 
                f_out.write('%.6f, %.6f\n' %(frac_topk, frac_kendal))  # write vc into the file
                f_out.flush()
 
-               model_path = '%s/nrange_iter_%d_%d_%d.ckpt' % (save_dir, NUM_MIN, NUM_MAX,iter)
+               model_path = '%s/nrange_iter_%d_%d_%d.ckpt' % (checkpoint_dir, NUM_MIN, NUM_MAX,iter)
 
-               logs_out.write('\niter %d, Top0.01: %.6f, kendal: %.6f'%(iter, frac_topk, frac_kendal))
+               logs_out.write('\niter %d, Top 0.01: %.6f, kendal: %.6f'%(iter, frac_topk, frac_kendal))
                logs_out.write('\ntesting %d graphs time: %.2fs' % (n_valid, test_end - test_start))
                N_end = time.clock()
                logs_out.write('\n500 iterations total time: %.2fs' % (N_end - N_start))
@@ -473,6 +480,7 @@ class BetLearn:
                logs_out.flush()
 
                self.SaveModel(model_path)
+
         f_out.close()
         logs_out.close()
 
@@ -531,7 +539,7 @@ class BetLearn:
 
 
     def EvaluateRealData(self, model_file, data_test, label_file):  # test real data
-        g = nx.read_weighted_edgelist(data_test)
+        g = nx.read_edgelist(data_test)
         sys.stdout.flush()
         self.LoadModel(model_file)
 
