@@ -45,9 +45,18 @@ INF = 100000000000
 
 class BetLearn:
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         # init some parameters
-        self.g_type = 'powerlaw' #'erdos_renyi', 'powerlaw', 'small-world', 'barabasi_albert'
+        self.g_type = kwargs.get('graph_type', 'powerlaw')
+        #'erdos_renyi', 'powerlaw', 'small-world', 'barabasi_albert'
+        global NUM_MIN
+        global NUM_MAX
+        global MAX_ITERATION 
+
+        NUM_MIN = kwargs.get('NUM_MIN', NUM_MIN)
+        NUM_MAX = kwargs.get('NUM_MAX', NUM_MAX)
+        MAX_ITERATION = kwargs.get('MAX_ITERATION', MAX_ITERATION)
+
         self.embedding_size = EMBEDDING_SIZE
         self.learning_rate = LEARNING_RATE
         self.reg_hidden = REG_HIDDEN
@@ -63,6 +72,7 @@ class BetLearn:
         self.ngraph_train = 0
         self.ngraph_test = 0
 
+        tf.disable_v2_behavior()
         # [node_cnt, node_feat_dim]
         self.node_feat = tf.placeholder(tf.float32, name="node_feat")
         # [node_cnt, aux_feat_dim]
@@ -260,7 +270,7 @@ class BetLearn:
         loss = tf.reduce_sum(loss, axis=1)
         return tf.reduce_mean(loss)
 
-    def gen_graph(self, num_min, num_max):
+    def gen_graph(self, num_min=NUM_MIN, num_max=NUM_MAX):
         cur_n = np.random.randint(num_max - num_min + 1) + num_min
         if self.g_type == 'erdos_renyi':
             g = nx.erdos_renyi_graph(n=cur_n, p=0.15)
@@ -270,6 +280,7 @@ class BetLearn:
             g = nx.barabasi_albert_graph(n=cur_n, m=4)
         elif self.g_type == 'powerlaw':
             g = nx.powerlaw_cluster_graph(n=cur_n, m=4, p=0.05)
+        
         return g
 
     def gen_new_graphs(self, num_min, num_max):
@@ -307,11 +318,15 @@ class BetLearn:
         print('\ngenerating validation graphs...')
         sys.stdout.flush()
         self.ClearTestGraphs()
+        graphs = []
         for i in tqdm(range(n_valid)):
             g = self.gen_graph(NUM_MIN, NUM_MAX)
             self.InsertGraph(g, is_test=True)
             bc = self.utils.Betweenness(self.GenNetwork(g))
             self.TestBetwList.append(bc)
+            graphs.append(g)
+        
+        return graphs
 
     def SetupBatchGraph(self,g_list):
         prepareBatchGraph = PrepareBatchGraph.py_PrepareBatchGraph(aggregatorID)
@@ -457,6 +472,7 @@ class BetLearn:
             frac_topk += topk/n_test
             frac_kendal += kendal/n_test
         print('\nRun_time, Top1%, Kendall tau: %.6f, %.6f, %.6f'% (frac_run_time, frac_topk, frac_kendal))
+        
         return frac_run_time, frac_topk, frac_kendal
 
 
@@ -464,9 +480,11 @@ class BetLearn:
         g = nx.read_weighted_edgelist(data_test)
         sys.stdout.flush()
         self.LoadModel(model_file)
+
         betw_label = []
         for line in open(label_file):
             betw_label.append(float(line.strip().split()[1]))
+
         self.TestBetwList.append(betw_label)
         start = time.time()
         self.InsertGraph(g, is_test=True)

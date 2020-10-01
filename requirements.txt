@@ -3,4 +3,5 @@ networkx
 scipy
 numpy
 pandas
+tensorflow==1.15
 tqdm
