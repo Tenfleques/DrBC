@@ -17,7 +17,7 @@ import PrepareBatchGraph
 import metrics
 import pickle as cp
 import os
-
+import time
 
 EMBEDDING_SIZE = 128 # embedding dimension
 LEARNING_RATE = 0.0001
@@ -281,17 +281,38 @@ class BetLearn:
         elif self.g_type == 'powerlaw':
             g = nx.powerlaw_cluster_graph(n=cur_n, m=4, p=0.05)
         
+        
         return g
 
-    def gen_new_graphs(self, num_min, num_max):
+    def gen_new_graphs(self, num_min, num_max, save_dir, dataset_order):
         print('\ngenerating new training graphs...')
         self.ClearTrainGraphs()
+        out_dir = os.path.join(save_dir, "ds-{}".format(dataset_order))
+
         for i in tqdm(range(1000)):
             g = self.gen_graph(num_min, num_max)
             self.InsertGraph(g, is_test=False)
+            
+            out_file_name = os.path.join(out_dir, "graph-{}-.txt".format(i))
+            nx.write_edgelist(g, out_file_name)
+
             bc = self.utils.Betweenness(self.GenNetwork(g))
             bc_log = self.utils.bc_log
+
+            out_file_name = os.path.join(out_dir, "graph-bc-{}-.txt".format(i))
+            with open(out_file_name, "w") as fp:
+                bc_str = "\n".join(bc)
+                fp.write(bc_str)
+                fp.close()
+            
+            out_file_name = os.path.join(out_dir, "graph-bc-log-{}-.txt".format(i))
+            with open(out_file_name, "w") as fp:
+                bc_log_str = "\n".join(bc_log)
+                fp.write(bc_log_str)
+                fp.close()
+            
             self.TrainBetwList.append(bc_log)
+
 
     def ClearTrainGraphs(self):
         self.ngraph_train = 0
@@ -386,18 +407,39 @@ class BetLearn:
         loss = result[0]
         return loss / len(g_list)
 
-    def Train(self):
+    def Train(self, save_dir = './models', logs_dir='./logs'):
         self.PrepareValidData()
-        self.gen_new_graphs(NUM_MIN, NUM_MAX)
 
-        save_dir = './models'
+        dataset_dir = os.path.join(save_dir, "datasets")
+        
+        dataset_order = 0
+        self.gen_new_graphs(NUM_MIN, NUM_MAX, dataset_dir, dataset_order)
+        dataset_order += 1
+
         VCFile = '%s/ValidValue.csv' % (save_dir)
+        logs_file = os.path.join(logs_dir, "stdout", "log")
+        
         f_out = open(VCFile, 'w')
+        f_out.write('top-k, frac_kendal\n')  # write vc into the file
+        f_out.flush()
+
+        train_log_dir = os.path.join(logs_dir,'train')
+        test_log_dir = os.path.join(logs_dir,'test')
+
+        train_summary_writer = tf.summary.create_file_writer(train_log_dir)
+        test_summary_writer = tf.summary.create_file_writer(test_log_dir)
+
+        logs_out = open(logs_file)
         for iter in range(MAX_ITERATION):
             TrainLoss = self.Fit()
             start = time.clock()
             if iter and iter % 5000 == 0:
-                self.gen_new_graphs(NUM_MIN, NUM_MAX)
+                self.gen_new_graphs(NUM_MIN, NUM_MAX, dataset_dir, dataset_order)
+                dataset_order += 1
+            
+            with train_summary_writer.as_default():
+                tf.summary.scalar('loss', TrainLoss, step=iter)
+
             if iter % 500 == 0:
                if (iter == 0):
                    N_start = start
@@ -405,22 +447,34 @@ class BetLearn:
                    N_start = N_end
                frac_topk, frac_kendal = 0.0, 0.0
                test_start = time.time()
+
                for idx in range(n_valid):
-                   run_time, temp_topk, temp_kendal = self.Test(idx)
+                   _, temp_topk, temp_kendal = self.Test(idx)
                    frac_topk += temp_topk / n_valid
                    frac_kendal += temp_kendal / n_valid
+
                test_end = time.time()
+               with test_summary_writer.as_default():
+                    tf.summary.scalar('top-k', frac_topk, step=iter)
+                    tf.summary.scalar('frac_kendal', frac_kendal, step=iter)
+
                f_out.write('%.6f, %.6f\n' %(frac_topk, frac_kendal))  # write vc into the file
                f_out.flush()
-               print('\niter %d, Top0.01: %.6f, kendal: %.6f'%(iter, frac_topk, frac_kendal))
-               print('testing %d graphs time: %.2fs' % (n_valid, test_end - test_start))
-               N_end = time.clock()
-               print('500 iterations total time: %.2fs' % (N_end - N_start))
-               print('Training loss is %.4f' % TrainLoss)
-               sys.stdout.flush()
+
                model_path = '%s/nrange_iter_%d_%d_%d.ckpt' % (save_dir, NUM_MIN, NUM_MAX,iter)
+
+               logs_out.write('\niter %d, Top0.01: %.6f, kendal: %.6f'%(iter, frac_topk, frac_kendal))
+               logs_out.write('\ntesting %d graphs time: %.2fs' % (n_valid, test_end - test_start))
+               N_end = time.clock()
+               logs_out.write('\n500 iterations total time: %.2fs' % (N_end - N_start))
+               logs_out.write('\nTraining loss is %.4f' % TrainLoss)
+               logs_out.write('\n{}\n{}'.format(model_path, "*"*24))
+
+               logs_out.flush()
+
                self.SaveModel(model_path)
         f_out.close()
+        logs_out.close()
 
     def Test(self, gid):
         g_list = [self.TestSet.Get(gid)]
