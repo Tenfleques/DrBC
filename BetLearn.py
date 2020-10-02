@@ -3,6 +3,7 @@
 """
 """
 from __future__ import print_function, division
+from torch.utils.tensorboard import SummaryWriter
 import tensorflow as tf
 import networkx as nx
 import time
@@ -16,7 +17,7 @@ import metrics
 import pickle as cp
 import os
 import time
-from torch.utils.tensorboard import SummaryWriter
+
 
 
 EMBEDDING_SIZE = 128 # embedding dimension

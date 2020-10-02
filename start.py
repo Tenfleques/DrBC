@@ -4,8 +4,8 @@ import time
 
 def main():
     ########## Train
-    NUM_MIN=3000
-    NUM_MAX=4000
+    NUM_MIN=30000
+    NUM_MAX=40000
     weighted=False
 
     btl = BetLearn(NUM_MIN=NUM_MIN, NUM_MAX=NUM_MAX, weighted=weighted)
