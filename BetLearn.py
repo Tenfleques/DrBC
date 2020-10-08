@@ -30,6 +30,7 @@ NUM_MIN = 100  # minimum training scale (node set size)
 NUM_MAX = 200  # maximum training scale (node set size)
 MAX_ITERATION = 10000   # training iterations
 n_valid = 100   # number of validation graphs
+TRAIN_SAMPLES = 100 # number of train graphs
 aggregatorID = 2 # how to aggregate node neighbors, 0:sum; 1:mean; 2:GCN(weighted sum)
 combineID = 1   # how to combine self embedding and neighbor embedding,
                    # 0:structure2vec(add node feature and neighbor embedding)
@@ -51,11 +52,13 @@ class BetLearn:
         #'erdos_renyi', 'powerlaw', 'small-world', 'barabasi_albert'
         global NUM_MIN
         global NUM_MAX
-        global MAX_ITERATION 
+        global MAX_ITERATION
+        global combineID
 
         NUM_MIN = kwargs.get('NUM_MIN', NUM_MIN)
         NUM_MAX = kwargs.get('NUM_MAX', NUM_MAX)
         MAX_ITERATION = kwargs.get('MAX_ITERATION', MAX_ITERATION)
+        combineID = kwargs.get('combineID', combineID)
 
         self.weighted = kwargs.get("weighted", False)
         self.embedding_size = EMBEDDING_SIZE
@@ -73,57 +76,57 @@ class BetLearn:
         self.ngraph_train = 0
         self.ngraph_test = 0
 
-        tf.disable_v2_behavior()
+        tf.compat.v1.disable_v2_behavior()
         # [node_cnt, node_feat_dim]
-        self.node_feat = tf.placeholder(tf.float32, name="node_feat")
+        self.node_feat = tf.compat.v1.placeholder(tf.float32, name="node_feat")
         # [node_cnt, aux_feat_dim]
-        self.aux_feat = tf.placeholder(tf.float32, name="aux_feat")
+        self.aux_feat = tf.compat.v1.placeholder(tf.float32, name="aux_feat")
         # [node_cnt, node_cnt]
-        self.n2nsum_param = tf.sparse_placeholder(tf.float64, name="n2nsum_param")
+        self.n2nsum_param = tf.compat.v1.sparse_placeholder(tf.float64, name="n2nsum_param")
 
 
         # [node_cnt,1]
-        self.label = tf.placeholder(tf.float32, shape=[None,1], name="label")
+        self.label = tf.compat.v1.placeholder(tf.float32, shape=[None,1], name="label")
         # sample node pairs to compute the ranking loss
-        self.pair_ids_src = tf.placeholder(tf.int32, shape=[1,None], name='pair_ids_src')
-        self.pair_ids_tgt = tf.placeholder(tf.int32, shape=[1,None], name='pair_ids_tgt')
+        self.pair_ids_src = tf.compat.v1.placeholder(tf.int32, shape=[1,None], name='pair_ids_src')
+        self.pair_ids_tgt = tf.compat.v1.placeholder(tf.int32, shape=[1,None], name='pair_ids_tgt')
 
         self.loss, self.trainStep, self.betw_pred, self.node_embedding, self.param_list = self.BuildNet()
 
-        self.saver = tf.train.Saver(max_to_keep=None)
-        config = tf.ConfigProto(device_count={"CPU": 8},  # limit to num_cpu_core CPU usage
+        self.saver = tf.compat.v1.train.Saver(max_to_keep=None)
+        config = tf.compat.v1.ConfigProto(device_count={"CPU": 8},  # limit to num_cpu_core CPU usage
                                 inter_op_parallelism_threads=100,
                                 intra_op_parallelism_threads=100,
                                 log_device_placement=False)
         config.gpu_options.allow_growth = True
-        self.session = tf.Session(config=config)
+        self.session = tf.compat.v1.Session(config=config)
 
-        self.session.run(tf.global_variables_initializer())
+        self.session.run(tf.compat.v1.global_variables_initializer())
 
 
     def BuildNet(self):
         # [node_feat_dim, embed_dim]
-        w_n2l = tf.Variable(tf.truncated_normal([node_feat_dim, self.embedding_size], stddev=initialization_stddev), tf.float32, name="w_n2l")
+        w_n2l = tf.Variable(tf.random.truncated_normal([node_feat_dim, self.embedding_size], stddev=initialization_stddev), tf.float32, name="w_n2l")
         # [embed_dim, embed_dim]
-        p_node_conv = tf.Variable(tf.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="p_node_conv")
+        p_node_conv = tf.Variable(tf.random.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="p_node_conv")
 
         if combineID == 1:  # 'graphsage'
             # [embed_dim, embed_dim]
-            p_node_conv2 = tf.Variable(tf.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="p_node_conv2")
+            p_node_conv2 = tf.Variable(tf.random.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="p_node_conv2")
             # [2*embed_dim, embed_dim]
-            p_node_conv3 = tf.Variable(tf.truncated_normal([2 * self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="p_node_conv3")
+            p_node_conv3 = tf.Variable(tf.random.truncated_normal([2 * self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="p_node_conv3")
         elif combineID ==2: #GRU
-            w_r = tf.Variable(tf.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="w_r")
-            u_r = tf.Variable(tf.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="u_r")
-            w_z = tf.Variable(tf.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="w_z")
-            u_z = tf.Variable(tf.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="u_z")
-            w = tf.Variable(tf.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="w")
-            u = tf.Variable(tf.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="u")
+            w_r = tf.Variable(tf.random.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="w_r")
+            u_r = tf.Variable(tf.random.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="u_r")
+            w_z = tf.Variable(tf.random.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="w_z")
+            u_z = tf.Variable(tf.random.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="u_z")
+            w = tf.Variable(tf.random.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="w")
+            u = tf.Variable(tf.random.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="u")
 
         # [embed_dim, reg_hidden]
-        h1_weight = tf.Variable(tf.truncated_normal([self.embedding_size, self.reg_hidden], stddev=initialization_stddev), tf.float32,name="h1_weight")
+        h1_weight = tf.Variable(tf.random.truncated_normal([self.embedding_size, self.reg_hidden], stddev=initialization_stddev), tf.float32,name="h1_weight")
         # [reg_hidden+aux_feat_dim, 1]
-        h2_weight = tf.Variable(tf.truncated_normal([self.reg_hidden+aux_feat_dim, 1], stddev=initialization_stddev), tf.float32,name="h2_weight")
+        h2_weight = tf.Variable(tf.random.truncated_normal([self.reg_hidden+aux_feat_dim, 1], stddev=initialization_stddev), tf.float32,name="h2_weight")
         # [reg_hidden, 1]
         last_w = h2_weight
 
@@ -142,26 +145,26 @@ class BetLearn:
         if JK:  # # 1:max_pooling; 2:min_pooling; 3:mean_pooling; 4:LSTM with attention
             cur_message_layer_JK = cur_message_layer
         if JK == 4:  #LSTM init hidden layer
-            w_r_JK = tf.Variable(tf.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="w_r_JK")
-            u_r_JK = tf.Variable(tf.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="u_r_JK")
-            w_z_JK = tf.Variable(tf.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="w_z_JK")
-            u_z_JK = tf.Variable(tf.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="u_z_JK")
-            w_JK = tf.Variable(tf.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="w_JK")
-            u_JK = tf.Variable(tf.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="u_JK")
+            w_r_JK = tf.Variable(tf.random.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="w_r_JK")
+            u_r_JK = tf.Variable(tf.random.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="u_r_JK")
+            w_z_JK = tf.Variable(tf.random.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="w_z_JK")
+            u_z_JK = tf.Variable(tf.random.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="u_z_JK")
+            w_JK = tf.Variable(tf.random.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="w_JK")
+            u_JK = tf.Variable(tf.random.truncated_normal([self.embedding_size, self.embedding_size], stddev=initialization_stddev), tf.float32,name="u_JK")
             #attention matrix
-            JK_attention = tf.Variable(tf.truncated_normal([self.embedding_size, 1], stddev=initialization_stddev), tf.float32,name="JK_attention")
+            JK_attention = tf.Variable(tf.random.truncated_normal([self.embedding_size, 1], stddev=initialization_stddev), tf.float32,name="JK_attention")
             #attention list
             JK_attention_list =[]
             JK_Hidden_list=[]
             cur_message_layer_list = []
             cur_message_layer_list.append(cur_message_layer)
-            JK_Hidden = tf.truncated_normal(tf.shape(cur_message_layer), stddev=initialization_stddev)
+            JK_Hidden = tf.random.truncated_normal(tf.shape(cur_message_layer), stddev=initialization_stddev)
 
         # max_bp_iter steps of neighbor propagation
         while lv < max_bp_iter:
             lv = lv + 1
             # [node_cnt, node_cnt]*[node_cnt, embed_dim] = [node_cnt, embed_dim]
-            n2npool = tf.sparse_tensor_dense_matmul(tf.cast(self.n2nsum_param, tf.float64), tf.cast(cur_message_layer, tf.float64))
+            n2npool = tf.sparse.sparse_dense_matmul(tf.cast(self.n2nsum_param, tf.float64), tf.cast(cur_message_layer, tf.float64))
             n2npool = tf.cast(n2npool, tf.float32)
 
             # [node_cnt, embed_dim] * [embedding, embedding] = [node_cnt, embed_dim], dense
@@ -261,9 +264,9 @@ class BetLearn:
         preds = tf.nn.embedding_lookup(betw_pred, self.pair_ids_src) - tf.nn.embedding_lookup(betw_pred, self.pair_ids_tgt)
 
         loss = self.pairwise_ranking_loss(preds, labels)
-        trainStep = tf.train.AdamOptimizer(self.learning_rate).minimize(loss)
+        trainStep = tf.compat.v1.train.AdamOptimizer(self.learning_rate).minimize(loss)
 
-        return loss, trainStep, betw_pred,embed_s_a,tf.trainable_variables()
+        return loss, trainStep, betw_pred,embed_s_a,tf.compat.v1.trainable_variables()
 
     def pairwise_ranking_loss(self, preds, labels):
         """Logit cross-entropy loss with masking."""
@@ -285,36 +288,79 @@ class BetLearn:
     
         return g
 
+    def PrepareValidData(self, num_min, num_max, save_dir, dataset_order):
+        print('\ngenerating validation graphs...')
+        sys.stdout.flush()
+        self.ClearTestGraphs()
+        out_dir = os.path.join(save_dir, "ds-{}".format(dataset_order))
+        os.makedirs(out_dir, exist_ok=True)
+
+        for i in tqdm(range(n_valid)):
+            out_file_name = os.path.join(out_dir, "graph-{}-.txt".format(i))
+            if os.path.isfile(out_file_name):
+                g = nx.read_edgelist(out_file_name)
+            else:
+                g = self.gen_graph(num_min, num_max)
+                nx.write_edgelist(g, out_file_name, data=self.weighted)
+
+            self.InsertGraph(g, is_test=True)
+            
+            out_file_name = os.path.join(out_dir, "graph-bc-{}-.txt".format(i))
+            if os.path.isfile(out_file_name):
+                with open(out_file_name, "r") as fpc:
+                    bc = map(float, fpc.readlines())
+                    fpc.close()
+            else:
+                bc = self.utils.Betweenness(self.GenNetwork(g))
+                if isinstance(bc, list):
+                    with open(out_file_name, "w") as fp:
+                        bc_str = "\n".join(map(str, bc))
+                        fp.write(bc_str)
+                        fp.close()
+                        
+            self.TestBetwList.append(bc)
+            
+
+    
+        
     def gen_new_graphs(self, num_min, num_max, save_dir, dataset_order):
         print('\ngenerating new training graphs...')
         self.ClearTrainGraphs()
         out_dir = os.path.join(save_dir, "ds-{}".format(dataset_order))
         os.makedirs(out_dir, exist_ok=True)
 
-        for i in tqdm(range(1000)):
-            g = self.gen_graph(num_min, num_max)
+        for i in tqdm(range(TRAIN_SAMPLES)):
+            out_file_name = os.path.join(out_dir, "graph-{}-.txt".format(i))
+            if os.path.isfile(out_file_name):
+                g = nx.read_edgelist(out_file_name)
+            else:
+                g = self.gen_graph(num_min, num_max)
+                nx.write_edgelist(g, out_file_name, data=self.weighted)
+
             self.InsertGraph(g, is_test=False)
             
-            out_file_name = os.path.join(out_dir, "graph-{}-.txt".format(i))
-            
-            nx.write_edgelist(g, out_file_name, data=self.weighted)
+            out_file_name = os.path.join(out_dir, "graph-bc-log-{}-.txt".format(i))
 
-            bc = self.utils.Betweenness(self.GenNetwork(g))
-            bc_log = self.utils.bc_log
-
-            if isinstance(bc, list):
-                out_file_name = os.path.join(out_dir, "graph-bc-{}-.txt".format(i))
-                with open(out_file_name, "w") as fp:
-                    bc_str = "\n".join(map(str, bc))
-                    fp.write(bc_str)
-                    fp.close()
-            
-            if isinstance(bc_log, list):
-                out_file_name = os.path.join(out_dir, "graph-bc-log-{}-.txt".format(i))
-                with open(out_file_name, "w") as fpc:
-                    bc_log_str = "\n".join(map(str, bc_log))
-                    fpc.write(bc_log_str)
+            if os.path.isfile(out_file_name):
+                with open(out_file_name, "r") as fpc:
+                    bc_log = map(float, fpc.readlines())
                     fpc.close()
+            else:
+                bc = self.utils.Betweenness(self.GenNetwork(g))
+                bc_log = self.utils.bc_log
+
+                if isinstance(bc_log, list):
+                    with open(out_file_name, "w") as fpc:
+                        bc_log_str = "\n".join(map(str, bc_log))
+                        fpc.write(bc_log_str)
+                        fpc.close()
+
+                if isinstance(bc, list):
+                    out_file_name = os.path.join(out_dir, "graph-bc-{}-.txt".format(i))
+                    with open(out_file_name, "w") as fp:
+                        bc_str = "\n".join(map(str, bc))
+                        fp.write(bc_str)
+                        fp.close()
                 
             self.TrainBetwList.append(bc_log)
 
@@ -339,20 +385,6 @@ class BetLearn:
             t = self.ngraph_train
             self.ngraph_train += 1
             self.TrainSet.InsertGraph(t, self.GenNetwork(g))
-
-    def PrepareValidData(self):
-        print('\ngenerating validation graphs...')
-        sys.stdout.flush()
-        self.ClearTestGraphs()
-        graphs = []
-        for i in tqdm(range(n_valid)):
-            g = self.gen_graph(NUM_MIN, NUM_MAX)
-            self.InsertGraph(g, is_test=True)
-            bc = self.utils.Betweenness(self.GenNetwork(g))
-            self.TestBetwList.append(bc)
-            graphs.append(g)
-        
-        return graphs
 
     def SetupBatchGraph(self,g_list):
         prepareBatchGraph = PrepareBatchGraph.py_PrepareBatchGraph(aggregatorID)
@@ -413,19 +445,37 @@ class BetLearn:
         return loss / len(g_list)
 
     def Train(self, save_dir = './models', logs_dir='./logs'):
-        self.PrepareValidData()
 
-        dataset_dir = os.path.join(save_dir, "dataset")
+        dataset_dir = os.path.join(save_dir, "dataset", "train")
+        val_dir = os.path.join(save_dir, "dataset", "val")
         checkpoint_dir = os.path.join(save_dir, "checkpoints")
+        
         os.makedirs(dataset_dir, exist_ok=True)
+        os.makedirs(val_dir, exist_ok=True)
         os.makedirs(logs_dir, exist_ok=True)
         os.makedirs(checkpoint_dir, exist_ok=True)
         
         dataset_order = 0
-        self.gen_new_graphs(NUM_MIN, NUM_MAX, dataset_dir, dataset_order)
+
+        dataset_creation_file = os.path.join(save_dir, "data-creation-records.txt")
+        with open(dataset_creation_file, "w") as dfp:
+            start_time = time.time()
+            self.PrepareValidData(NUM_MIN, NUM_MAX, val_dir, dataset_order)
+            validation_creation_time = time.time() - start_time
+            
+            dfp.write("time creation validation set: {} mins for {} items".format(validation_creation_time/60, n_valid))
+
+            start_time = time.time()
+            self.gen_new_graphs(NUM_MIN, NUM_MAX, dataset_dir, dataset_order)
+            train_creation_time = time.time() - start_time
+            
+            dfp.write("time creation train set: {} mins for {} items".format(train_creation_time/60, TRAIN_SAMPLES))
+            
+            dfp.close()
+
         dataset_order += 1
 
-        VCFile = '%s/ValidValue.csv' % (save_dir)
+        VCFile = os.path.join(save_dir, 'ValidValue.csv')
         logs_file = os.path.join(logs_dir, "train.log")
         
         f_out = open(VCFile, 'w')
@@ -563,6 +613,7 @@ class BetLearn:
         top01 = self.metrics.RankTopK(betw_label, betw_predict, 0.1)
         kendal = self.metrics.RankKendal(betw_label, betw_predict)
         self.ClearTestGraphs()
+
         return top001, top005, top01, kendal, run_time
 
 
